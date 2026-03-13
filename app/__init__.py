@@ -1,0 +1,2 @@
+"""TaskMNG desktop app package."""
+
