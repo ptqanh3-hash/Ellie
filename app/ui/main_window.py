@@ -367,7 +367,6 @@ class OpportunitiesView(BaseView):
         self.selected_opportunity_id: int | None = None
         self.selected_stage_id: int | None = None
         self.selected_task_id: int | None = None
-        self.stage_map: dict[str, int] = {}
         self.current_tasks: list[dict] = []
         self.current_opportunity: dict | None = None
         self.current_stages: list[dict] = []
@@ -387,7 +386,7 @@ class OpportunitiesView(BaseView):
         action_specs = (
             ("Import Excel", self.import_excel, True),
             ("New Opportunity", self.open_new_opportunity, True),
-            ("Add Stage", self.open_new_stage, False),
+            ("Add Stage-Status", self.open_new_stage, False),
             ("Add Task", self.open_new_task, False),
         )
         for idx, (label, command, primary) in enumerate(action_specs):
@@ -465,12 +464,8 @@ class OpportunitiesView(BaseView):
         )
         self.delete_task_button.grid(row=0, column=5)
 
-        stage_row = ctk.CTkFrame(self.detail_panel, fg_color="transparent")
-        stage_row.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 10))
-        stage_row.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(stage_row, text="Stage", text_color=PALETTE["ink_700"]).grid(row=0, column=0, sticky="w")
-        self.stage_selector = ctk.CTkOptionMenu(stage_row, values=["General | TT"], command=self.on_stage_change)
-        self.stage_selector.grid(row=0, column=1, sticky="ew", padx=(12, 0))
+        self.stage_summary = ctk.CTkLabel(self.detail_panel, text="", text_color=PALETTE["ink_700"], justify="left")
+        self.stage_summary.grid(row=3, column=0, sticky="w", padx=18, pady=(0, 10))
 
         self.task_focus = ctk.CTkFrame(self.detail_panel, fg_color=PALETTE["surface_1"], border_width=1, border_color=PALETTE["border_soft"])
         self.task_focus.grid(row=4, column=0, sticky="ew", padx=18, pady=(0, 10))
@@ -485,8 +480,8 @@ class OpportunitiesView(BaseView):
         self.task_focus_meta = ctk.CTkLabel(self.task_focus, text="", justify="left", text_color=PALETTE["ink_700"])
         self.task_focus_meta.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 12))
 
-        self.task_list = ctk.CTkScrollableFrame(self.detail_panel, fg_color=PALETTE["surface_1"])
-        self.task_list.grid(row=5, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        self.stage_sections = ctk.CTkScrollableFrame(self.detail_panel, fg_color=PALETTE["surface_1"])
+        self.stage_sections.grid(row=5, column=0, sticky="nsew", padx=18, pady=(0, 18))
 
     def refresh(self):
         opportunities = self.app.opportunity_service.list_opportunities()
@@ -507,16 +502,14 @@ class OpportunitiesView(BaseView):
         self.current_tasks = []
         self.selected_stage_id = None
         self.selected_task_id = None
-        self.stage_map = {}
         self.summary_title.configure(text="Select an opportunity")
         self.summary_meta.configure(text="")
-        self.stage_selector.configure(values=["General | TT"])
-        self.stage_selector.set("General | TT")
+        self.stage_summary.configure(text="")
         self.task_focus_title.configure(text="Select a task")
         self.task_focus_meta.configure(text="No task selected.")
-        for child in self.task_list.winfo_children():
+        for child in self.stage_sections.winfo_children():
             child.destroy()
-        ctk.CTkLabel(self.task_list, text="No opportunity selected.", text_color=PALETTE["ink_700"]).pack(anchor="w", padx=8, pady=8)
+        ctk.CTkLabel(self.stage_sections, text="No opportunity selected.", text_color=PALETTE["ink_700"]).pack(anchor="w", padx=8, pady=8)
         self._update_action_states()
 
     def _visible_opportunities(self) -> list[dict]:
@@ -609,29 +602,29 @@ class OpportunitiesView(BaseView):
                 f"Detail: {opportunity.get('detail') or '-'}"
             )
         )
-        self.stage_map = {self._stage_display_label(stage): stage["id"] for stage in stages}
-        stage_values = list(self.stage_map.keys()) or ["General | TT"]
-        self.stage_selector.configure(values=stage_values)
-        if reselect_stage and self.selected_stage_id in self.stage_map.values():
-            selected_name = next((name for name, stage_id in self.stage_map.items() if stage_id == self.selected_stage_id), stage_values[0])
-        else:
-            selected_name = stage_values[0]
-            self.selected_stage_id = self.stage_map.get(selected_name)
-        self.stage_selector.set(selected_name)
+        if stages and (not reselect_stage or self.selected_stage_id not in {stage["id"] for stage in stages}):
+            self.selected_stage_id = stages[0]["id"]
+        elif not stages:
+            self.selected_stage_id = None
+        self.stage_summary.configure(text=f"{len(stages)} stage-status pair(s) | {len(self.current_tasks)} task(s)")
         self._reconcile_selected_task()
         self._render_task_focus()
         self.render_tasks()
         self.render_opportunities()
         self._update_action_states()
 
-    def _filtered_tasks(self) -> list[dict]:
-        return [task for task in self.current_tasks if not self.selected_stage_id or task["phase_id"] == self.selected_stage_id]
+    def _tasks_for_stage(self, stage_id: int) -> list[dict]:
+        return [task for task in self.current_tasks if task["phase_id"] == stage_id]
 
     def _reconcile_selected_task(self):
-        visible_tasks = self._filtered_tasks()
-        visible_ids = {task["id"] for task in visible_tasks}
+        visible_ids = {task["id"] for task in self.current_tasks}
         if self.selected_task_id not in visible_ids:
-            self.selected_task_id = visible_tasks[0]["id"] if visible_tasks else None
+            preferred = self._tasks_for_stage(self.selected_stage_id) if self.selected_stage_id else []
+            if self.selected_stage_id and not preferred:
+                self.selected_task_id = None
+                return
+            pool = preferred or self.current_tasks
+            self.selected_task_id = pool[0]["id"] if pool else None
 
     def _selected_task(self) -> dict | None:
         return next((task for task in self.current_tasks if task["id"] == self.selected_task_id), None)
@@ -654,56 +647,116 @@ class OpportunitiesView(BaseView):
         )
 
     def render_tasks(self):
-        for child in self.task_list.winfo_children():
+        for child in self.stage_sections.winfo_children():
             child.destroy()
-        filtered = self._filtered_tasks()
-        if not filtered:
-            ctk.CTkLabel(self.task_list, text="No tasks in this stage yet.", text_color=PALETTE["ink_700"]).pack(anchor="w", padx=8, pady=8)
+        if not self.current_stages:
+            ctk.CTkLabel(self.stage_sections, text="No stage-status pairs yet.", text_color=PALETTE["ink_700"]).pack(anchor="w", padx=8, pady=8)
             return
-        for task in filtered:
-            selected = task["id"] == self.selected_task_id
-            card = ctk.CTkFrame(
-                self.task_list,
-                fg_color=PALETTE["primary_500"] if selected else PALETTE["surface_0"],
-                border_width=1,
-                border_color=PALETTE["border_soft"],
+        for stage in self.current_stages:
+            stage_selected = stage["id"] == self.selected_stage_id
+            section = ctk.CTkFrame(
+                self.stage_sections,
+                fg_color=PALETTE["surface_0"],
+                border_width=2 if stage_selected else 1,
+                border_color=PALETTE["primary_500"] if stage_selected else PALETTE["border_soft"],
+                corner_radius=18,
             )
-            card.pack(fill="x", padx=4, pady=6)
-            title_color = "white" if selected else PALETTE["ink_900"]
-            meta_color = "#EEF0FF" if selected else PALETTE["ink_700"]
-            title_label = ctk.CTkLabel(
-                card,
-                text=truncate_text(task["title"], 70),
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=title_color,
-                justify="left",
+            section.pack(fill="x", padx=4, pady=8)
+
+            header = ctk.CTkFrame(section, fg_color=PALETTE["surface_2"] if stage_selected else "transparent", corner_radius=14)
+            header.pack(fill="x", padx=10, pady=(10, 8))
+            header.grid_columnconfigure(0, weight=1)
+            stage_label = ctk.CTkLabel(
+                header,
+                text=self._stage_display_label(stage),
+                font=ctk.CTkFont(size=15, weight="bold"),
+                text_color=PALETTE["ink_900"],
                 anchor="w",
             )
-            title_label.pack(fill="x", padx=14, pady=(12, 4))
-            meta_text = (
-                f"Owner: {task.get('owner_name') or '-'} | PIC: {task.get('pic_name') or '-'}\n"
-                f"Status: {task['manual_status']} | Health: {title_case_health(task['health_status'])} | Deadline: {task.get('deadline') or '-'}\n"
-                f"Next: {task.get('next_action') or '-'}"
+            stage_label.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
+            count_label = ctk.CTkLabel(
+                header,
+                text=f"{stage.get('task_count') or 0} task(s)",
+                text_color=PALETTE["ink_700"],
+                anchor="w",
             )
-            meta_label = ctk.CTkLabel(card, text=meta_text, justify="left", text_color=meta_color, font=ctk.CTkFont(size=12), anchor="w")
-            meta_label.pack(fill="x", padx=14, pady=(0, 12))
-            full_text = (
-                f"{task['title']}\n"
-                f"Owner: {task.get('owner_name') or '-'} | PIC: {task.get('pic_name') or '-'}\n"
-                f"Status: {task['manual_status']} | Health: {title_case_health(task['health_status'])}\n"
-                f"Deadline: {task.get('deadline') or '-'}\n"
-                f"Next: {task.get('next_action') or '-'}\n"
-                f"Latest update: {task.get('latest_update_summary') or '-'}"
+            count_label.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 10))
+            add_task_button = ctk.CTkButton(
+                header,
+                text="Add Task",
+                width=92,
+                height=32,
+                command=lambda stage_id=stage["id"]: self.open_new_task(stage_id=stage_id),
             )
-            HoverTip(card, full_text)
-            HoverTip(title_label, full_text)
-            HoverTip(meta_label, full_text)
-            callback = lambda _event, task_id=task["id"]: self.select_task(task_id)
-            bind_click(card, callback)
-            bind_click(title_label, callback)
-            bind_click(meta_label, callback)
+            add_task_button.grid(row=0, column=1, rowspan=2, padx=10, pady=10)
 
-    def select_task(self, task_id: int):
+            select_stage = lambda _event, stage_id=stage["id"]: self.select_stage(stage_id)
+            bind_click(section, select_stage)
+            bind_click(header, select_stage)
+            bind_click(stage_label, select_stage)
+            bind_click(count_label, select_stage)
+
+            tasks = self._tasks_for_stage(stage["id"])
+            if not tasks:
+                ctk.CTkLabel(section, text="No tasks in this stage-status yet.", text_color=PALETTE["ink_700"]).pack(anchor="w", padx=14, pady=(0, 12))
+                continue
+
+            for task in tasks:
+                selected = task["id"] == self.selected_task_id
+                card = ctk.CTkFrame(
+                    section,
+                    fg_color=PALETTE["primary_500"] if selected else PALETTE["surface_1"],
+                    border_width=1,
+                    border_color=PALETTE["border_soft"],
+                    corner_radius=14,
+                )
+                card.pack(fill="x", padx=12, pady=(0, 8))
+                title_color = "white" if selected else PALETTE["ink_900"]
+                meta_color = "#EEF0FF" if selected else PALETTE["ink_700"]
+                title_label = ctk.CTkLabel(
+                    card,
+                    text=truncate_text(task["title"], 70),
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=title_color,
+                    justify="left",
+                    anchor="w",
+                )
+                title_label.pack(fill="x", padx=14, pady=(12, 4))
+                meta_text = (
+                    f"Owner: {task.get('owner_name') or '-'} | PIC: {task.get('pic_name') or '-'}\n"
+                    f"Status: {task['manual_status']} | Health: {title_case_health(task['health_status'])} | Deadline: {task.get('deadline') or '-'}\n"
+                    f"Next: {task.get('next_action') or '-'}"
+                )
+                meta_label = ctk.CTkLabel(card, text=meta_text, justify="left", text_color=meta_color, font=ctk.CTkFont(size=12), anchor="w")
+                meta_label.pack(fill="x", padx=14, pady=(0, 12))
+                full_text = (
+                    f"{task['title']}\n"
+                    f"Stage: {task.get('stage_name') or '-'} | Stage status: {task.get('stage_status') or '-'}\n"
+                    f"Owner: {task.get('owner_name') or '-'} | PIC: {task.get('pic_name') or '-'}\n"
+                    f"Status: {task['manual_status']} | Health: {title_case_health(task['health_status'])}\n"
+                    f"Deadline: {task.get('deadline') or '-'}\n"
+                    f"Next: {task.get('next_action') or '-'}\n"
+                    f"Latest update: {task.get('latest_update_summary') or '-'}"
+                )
+                HoverTip(card, full_text)
+                HoverTip(title_label, full_text)
+                HoverTip(meta_label, full_text)
+                callback = lambda _event, task_id=task["id"], stage_id=stage["id"]: self.select_task(task_id, stage_id)
+                bind_click(card, callback)
+                bind_click(title_label, callback)
+                bind_click(meta_label, callback)
+
+    def select_stage(self, stage_id: int):
+        self.selected_stage_id = stage_id
+        self.selected_task_id = None
+        self._reconcile_selected_task()
+        self._render_task_focus()
+        self.render_tasks()
+        self._update_action_states()
+
+    def select_task(self, task_id: int, stage_id: int | None = None):
+        if stage_id is not None:
+            self.selected_stage_id = stage_id
         self.selected_task_id = task_id
         self._render_task_focus()
         self.render_tasks()
@@ -719,15 +772,6 @@ class OpportunitiesView(BaseView):
         self.delete_stage_button.configure(state=stage_state)
         self.edit_task_button.configure(state=task_state)
         self.delete_task_button.configure(state=task_state)
-
-    def on_stage_change(self, stage_label: str):
-        if not self.selected_opportunity_id:
-            return
-        self.selected_stage_id = self.stage_map.get(stage_label)
-        self._reconcile_selected_task()
-        self._render_task_focus()
-        self.render_tasks()
-        self._update_action_states()
 
     def import_excel(self):
         path = filedialog.askopenfilename(
@@ -818,7 +862,7 @@ class OpportunitiesView(BaseView):
         if not self.selected_opportunity_id:
             self.toast("Select an opportunity before creating a stage.", "warning")
             return
-        StageDialog(self.app, on_submit=self._create_stage)
+        StageDialog(self.app, on_submit=self._create_stage, dialog_title="Add Stage-Status")
 
     def open_edit_stage(self):
         stage = self._selected_stage()
@@ -873,13 +917,15 @@ class OpportunitiesView(BaseView):
     def _stage_dialog_options(self) -> list[tuple[str, int]]:
         return [(self._stage_display_label(stage), stage["id"]) for stage in self.current_stages] or [("General | TT", self.selected_stage_id or 0)]
 
-    def open_new_task(self):
+    def open_new_task(self, stage_id: int | None = None):
         if not self.selected_opportunity_id:
             self.toast("Select an opportunity before creating a task.", "warning")
             return
         if not self.current_stages:
             self.toast("Create a stage before adding a task.", "warning")
             return
+        if stage_id is not None:
+            self.selected_stage_id = stage_id
         if not self.selected_stage_id:
             self.selected_stage_id = self.current_stages[0]["id"]
         TaskDialog(
@@ -1530,7 +1576,7 @@ class ConfirmDialog(ctk.CTkToplevel):
 
 
 class StageDialog(BaseModalDialog):
-    def __init__(self, app: TaskMNGApp, on_submit, initial_data: dict | None = None, dialog_title: str = "Add Stage"):
+    def __init__(self, app: TaskMNGApp, on_submit, initial_data: dict | None = None, dialog_title: str = "Add Stage-Status"):
         super().__init__(app, title=dialog_title, geometry="520x420", min_size=(480, 360))
         self.on_submit = on_submit
         self.initial_data = initial_data or {}
@@ -1551,7 +1597,7 @@ class StageDialog(BaseModalDialog):
 
         ctk.CTkButton(
             self.footer,
-            text="Save Stage",
+            text="Save Stage-Status",
             height=42,
             fg_color=PALETTE["primary_500"],
             hover_color=PALETTE["primary_700"],
